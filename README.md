@@ -65,6 +65,8 @@ occ/model.py       LSSOcc network
 occ/train.py       training loop + masked metrics
 occ/selfcheck.py   pre-training geometry checks against dataset labels
 occ/evaluate.py    final local + global evaluation, calibration, figures
+occ/compare.py     visible vs full model on cells whose vehicle is hidden
+occ/figure_hidden.py  the hidden-vehicle figure in report/
 occ/gif_infer.py   cache predictions for a run of sequential frames (GPU)
 occ/gif_render.py  the three explanation clips, .mp4 and .gif (CPU only)
 slurm/             smoke.sbatch, train.sbatch, train_full.sbatch, gif_infer.sbatch
