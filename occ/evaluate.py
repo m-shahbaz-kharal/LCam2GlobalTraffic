@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import torch
 
-from .data import EPISODES, N_CAMS, TRAIN_EPS, VAL_EPS, cache_paths
+from .data import EPISODES, LABEL_FILES, N_CAMS, TRAIN_EPS, VAL_EPS, cache_paths
 from .geometry import (DATA_ROOT, compose_max, compose_tables, coverage_map,
                        frustum_cell_tables, load_cameras, load_fov_mask, load_info, L)
 from .model import LSSOcc
@@ -79,8 +79,10 @@ def main():
     ap.add_argument("--cache", default="runs/cache")
     ap.add_argument("--out", default="runs/r50_lss_v1/report")
     ap.add_argument("--alpha-frame-step", type=int, default=45)
+    ap.add_argument("--labels", choices=["visible", "full"], default="visible")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    global_gt_name = LABEL_FILES[args.labels][1]
 
     K, cams = load_cameras()
     info = load_info()
@@ -88,7 +90,7 @@ def main():
     fov_t = torch.from_numpy(fov)
     comp_idx, gshape, sub = compose_tables(cams, info)
     covered = coverage_map(fov, comp_idx, gshape, sub) >= 1
-    lab_path, cnt_path = cache_paths(args.cache)
+    lab_path, cnt_path = cache_paths(args.cache, args.labels)
     labels = np.load(lab_path, mmap_mode="r")
     pred = Predictor(args.ckpt)
     results = {"covered_cells": int(covered.sum()), "total_cells": int(covered.size)}
@@ -100,7 +102,7 @@ def main():
         pm = pred.predict_frame(ei, f) * fov[None]
         gt_local = np.asarray(labels[ei, f], dtype=np.float32) * fov[None]
         gv_count = float(np.load(os.path.join(frame_dir(ei, f),
-                                              "global_occupancy_visible.npy")).sum())
+                                              global_gt_name)).sum())
         s_pred += compose_max(pm, comp_idx, gshape, sub).sum()
         s_orc += compose_max(gt_local, comp_idx, gshape, sub).sum()
         s_gt += gv_count
@@ -130,7 +132,7 @@ def main():
             band_acc[b].update(p, t, bm)
         pm = pm_raw * fov[None]
         gv = np.load(os.path.join(frame_dir(ei, f),
-                                  "global_occupancy_visible.npy")).astype(np.float64)
+                                  global_gt_name)).astype(np.float64)
         comp = compose_max(pm, comp_idx, gshape, sub) * alpha
         gstats.append(global_metrics(comp, gv, covered))
         orc = compose_max(np.asarray(labels[ei, f], np.float32) * fov[None],

@@ -104,6 +104,7 @@ def main():
     ap.add_argument("--val-frame-step", type=int, default=5)
     ap.add_argument("--max-hours", type=float, default=5.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--labels", choices=["visible", "full"], default="visible")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -121,7 +122,7 @@ def main():
         print(rec, flush=True)
 
     t_start = time.time()
-    build_cache(args.cache, args.data_root)
+    build_cache(args.cache, args.data_root, kind=args.labels)
 
     K, cams = load_cameras(args.data_root)
     tables, tables_flip = frustum_cell_tables(K, cams)
@@ -129,9 +130,11 @@ def main():
     mask_gpu = torch.from_numpy(fov).to(device)
 
     train_ds = OccDataset(args.cache, TRAIN_EPS, args.data_root,
-                          frame_step=args.frame_step, hflip=True)
+                          frame_step=args.frame_step, hflip=True,
+                          label_kind=args.labels)
     val_ds = OccDataset(args.cache, VAL_EPS, args.data_root,
-                        frame_step=args.val_frame_step, hflip=False)
+                        frame_step=args.val_frame_step, hflip=False,
+                        label_kind=args.labels)
     train_ld = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                           num_workers=args.workers, pin_memory=True, drop_last=True,
                           persistent_workers=True, prefetch_factor=6)
