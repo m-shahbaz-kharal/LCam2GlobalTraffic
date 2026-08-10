@@ -67,9 +67,9 @@ occ/selfcheck.py   pre-training geometry checks against dataset labels
 occ/evaluate.py    final local + global evaluation, calibration, figures
 occ/gif_infer.py   cache predictions for a run of sequential frames (GPU)
 occ/gif_render.py  the three explanation clips, .mp4 and .gif (CPU only)
-slurm/             smoke.sbatch, train.sbatch, gif_infer.sbatch
-runs/r50_lss_v1/   checkpoints, log.jsonl, report/ (results.json + figures)
-runs/gifs/         the clips below
+slurm/             smoke.sbatch, train.sbatch, train_full.sbatch, gif_infer.sbatch
+runs/<run>/        checkpoints, log.jsonl, report/ (results.json + figures)
+runs/clips_<run>/  the clips below, one folder per checkpoint
 ```
 
 ## Animations
@@ -79,13 +79,28 @@ camera's predicted grid for a run of consecutive frames, `gif_render` draws from
 cache. Frames in the dataset are **one simulated second apart**, so 40 frames played at
 4 fps is 40 s of town traffic in a 10 s clip.
 
+Clips live in `runs/clips_<run>/` and each frame is stamped with the checkpoint that drew
+it, so the two models' clips can't be mixed up:
+
 ```bash
-sbatch slurm/gif_infer.sbatch                       # ep_015, frames 0-39, ~1 min on an H100
 PY=$HOME/software/occ-venv/bin/python
-$PY -m occ.gif_render --preds runs/gifs/preds_ep015_f000-039.npz \
-    --labels-cache runs/cache/labels_visible.npy --out-dir runs/gifs \
-    --ms 250 --cam 69 --formats mp4,gif
+CAMS=89,91,2,17,92,84,85,114        # same eight cameras for every run, so clips line up
+
+# visible-labels model
+sbatch --export=ALL,RUN=r50_lss_v1 slurm/gif_infer.sbatch      # ~1 min on an H100
+$PY -m occ.gif_render --preds runs/clips_r50_lss_v1/preds_ep015_f000-039.npz \
+    --out-dir runs/clips_r50_lss_v1 --labels visible --hero-cams $CAMS --cam 69
+
+# full-labels model (infers vehicles hidden behind other vehicles)
+sbatch --export=ALL,RUN=r50_lss_full_v1 slurm/gif_infer.sbatch
+$PY -m occ.gif_render --preds runs/clips_r50_lss_full_v1/preds_ep015_f000-039.npz \
+    --out-dir runs/clips_r50_lss_full_v1 --labels full --hero-cams $CAMS --cam 69
 ```
+
+`--labels` picks the ground truth each model is judged against — `visible` compares to
+`global_occupancy_visible.npy`, `full` to `global_occupancy.npy` — and rewords the
+captions to match. The composition constant α is read from that run's own
+`report/results.json` (0.887 visible, 0.860 full) unless `--alpha` overrides it.
 
 Each clip is written twice: **`.mp4`** (H.264, yuv420p, 24 fps with a keyframe every
 second — pausable and scrubbable, which is what you want when talking over it) and
@@ -103,9 +118,11 @@ The cluster's `ffmpeg` modules have no libx264 (the CUDA build's `h264_nvenc` ne
 so `--formats mp4` uses a static ffmpeg at `~/software/bin/ffmpeg`, extracted from the
 `imageio-ffmpeg` wheel. Point `--ffmpeg` elsewhere if you have your own.
 
-The eight cameras in the first GIF are chosen automatically: highest *churn* (occupancy
-mass that changes from second to second, so moving traffic rather than parked cars),
-spread north–south over each half of town. `--cam` picks the single camera for the third.
+Without `--hero-cams`, the eight cameras in the first clip are chosen automatically:
+highest *churn* (occupancy mass that changes from second to second, so moving traffic
+rather than parked cars), spread north–south over each half of town. Pass the same list to
+every run when you want the clips to be comparable. `--cam` picks the single camera for
+the third clip — camera 069 is a junction with through traffic rather than parked cars.
 
 ## Reproduce
 

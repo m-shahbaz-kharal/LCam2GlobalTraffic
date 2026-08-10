@@ -48,6 +48,26 @@ CAM_COLORS = ["#ff6b6b", "#ffd166", "#8bd450", "#4ecdc4",
 
 VMAX = 0.9              # colour scale top for a 4 m occupancy cell
 
+# Wording differs with the label set the checkpoint was trained against: the "visible"
+# model only ever claims vehicles a camera can see, the "full" model also infers the
+# ones hidden behind other vehicles, and each is scored against its own ground truth.
+KIND = {
+    "visible": dict(
+        gt_file="global_occupancy_visible.npy",
+        truth_title="ground truth — vehicles the cameras can see",
+        hero_line="trained on the visible labels — it maps the vehicles a camera "
+                  "actually sees",
+        truth_legend="cyan outline = ground truth",
+    ),
+    "full": dict(
+        gt_file="global_occupancy.npy",
+        truth_title="ground truth — every vehicle, hidden ones included",
+        hero_line="trained on the full labels — it also fills in vehicles hidden "
+                  "behind other vehicles",
+        truth_legend="cyan outline = ground truth, hidden vehicles included",
+    ),
+}
+
 
 # ------------------------------------------------------------------ geometry ----
 def cam_footprint(cam, info):
@@ -225,6 +245,15 @@ def read_rgb(ei, f, cam):
     return cv2.imread(p, cv2.IMREAD_COLOR)[:, :, ::-1]
 
 
+def split_by_side(picks, cams, info):
+    """Order an explicit camera list into (west column, east column), north to south."""
+    GC = info["global_grid"]["shape_rows_cols"][1]
+    pos = {c: cam_xy_grid(cams[c], info) for c in picks}
+    left = sorted([c for c in picks if pos[c][0] < GC / 2], key=lambda c: pos[c][1])
+    right = sorted([c for c in picks if pos[c][0] >= GC / 2], key=lambda c: pos[c][1])
+    return left, right
+
+
 def pick_hero_cams(labels, ei, frames, cams, info, n_side=4):
     """Cameras with the most *moving* traffic, spread north-south on each half of town."""
     w = np.asarray(labels[ei, frames[0]:frames[-1] + 1], np.float32)
@@ -256,7 +285,10 @@ def gif_hero(P, out, ms):
     ei, frames, preds, alpha = P["ei"], P["frames"], P["preds"], P["alpha"]
     cams, info, fov = P["cams"], P["info"], P["fov"]
     road = P["road"]
-    left, right = pick_hero_cams(P["labels"], ei, frames, cams, info)
+    if P.get("hero_cams"):
+        left, right = split_by_side(P["hero_cams"], cams, info)
+    else:
+        left, right = pick_hero_cams(P["labels"], ei, frames, cams, info)
     picks = left + right
     print("hero cameras:", picks)
     colors = {c: CAM_COLORS[i % len(CAM_COLORS)] for i, c in enumerate(picks)}
@@ -265,8 +297,10 @@ def gif_hero(P, out, ms):
     W, H = 16.0, 9.0
     pw = 0.185
     ph = pw * W / H * (9 / 16)              # keep the 16:9 picture square-true
-    ys = np.linspace(0.855 - ph, 0.055, len(left))
-    slots = ([(0.008, y) for y in ys] + [(1 - 0.008 - pw, y) for y in ys])
+
+    def column(x, n):
+        return [(x, y) for y in np.linspace(0.855 - ph, 0.055, max(n, 1))][:n]
+    slots = column(0.008, len(left)) + column(1 - 0.008 - pw, len(right))
 
     out_frames = []
     for k, f in enumerate(frames):
@@ -321,10 +355,13 @@ def gif_hero(P, out, ms):
                  "each camera turns its own picture into a 16×16 local vehicle grid (small inset); "
                  "the coloured beam shows where that grid lands in the town map",
                  color=DIM, fontsize=11.0, ha="center", va="top")
+        fig.text(0.5, 0.918, KIND[P["kind"]]["hero_line"],
+                 color=DIM, fontsize=11.0, ha="center", va="top")
         fig.text(0.5, 0.0135,
                  f"CARLA Town05 · held-out episode {ei} · t = {k:02d} s "
                  f"· predicted vehicles in town: {comp.sum():5.1f}",
                  color=DIM, fontsize=11, ha="center", va="bottom", family="monospace")
+        _model_tag(fig, 0.008, P["model"])
         fig.text(0.225, 0.868, "town occupancy map, predicted", color=FG, fontsize=12.5,
                  ha="left", va="bottom")
         _heat_legend(fig, 0.775, 0.868)
@@ -332,6 +369,13 @@ def gif_hero(P, out, ms):
         plt.close(fig)
         print(f"hero frame {k+1}/{len(frames)}", flush=True)
     save_clip(out_frames, out, ms, P["formats"], P["ffmpeg"])
+
+
+def _model_tag(fig, x, model, y=0.0135):
+    """Which checkpoint drew this frame — the clips are otherwise easy to mix up."""
+    if model:
+        fig.text(x, y, f"model: {model}", color="#5c6880", fontsize=9.5, ha="left",
+                 va="bottom", family="monospace")
 
 
 def _heat_legend(fig, x, y, cmap=HEAT, label="vehicles per 4 m cell"):
@@ -354,7 +398,7 @@ def gif_vs_truth(P, out, ms):
     out_frames = []
     for k, f in enumerate(frames):
         comp = compose_max(preds[k] * fov[None], P["comp_idx"], P["gshape"], P["sub"]) * alpha
-        gt = np.load(os.path.join(frame_dir(ei, f), "global_occupancy_visible.npy"))
+        gt = np.load(os.path.join(frame_dir(ei, f), KIND[P["kind"]]["gt_file"]))
         fig = plt.figure(figsize=(W, H), dpi=P["dpi"], facecolor=BG)
         axa = fig.add_axes([0.035, 0.055, 0.44, 0.79])
         axb = fig.add_axes([0.525, 0.055, 0.44, 0.79])
@@ -362,7 +406,7 @@ def gif_vs_truth(P, out, ms):
         draw_map(axb, gt, road, cmap=HEAT)
         axa.set_title("predicted — composed from 141 camera views", color="#ffb26b",
                       fontsize=15, pad=10)
-        axb.set_title("ground truth — vehicles the cameras can see", color="#7ee8fa",
+        axb.set_title(KIND[P["kind"]]["truth_title"], color="#7ee8fa",
                       fontsize=15, pad=10)
         for ax, v, lab in ((axa, comp.sum(), "predicted"), (axb, gt.sum(), "actual")):
             ax.text(0.99, 0.015, f"{lab} vehicles: {v:5.1f}", transform=ax.transAxes,
@@ -379,6 +423,7 @@ def gif_vs_truth(P, out, ms):
                  f"held-out episode {ei} · t = {k:02d} s · count error {err:4.1f} %",
                  color=DIM, fontsize=12, ha="center", va="bottom", family="monospace")
         _heat_legend(fig, 0.60, 0.877)
+        _model_tag(fig, 0.035, P["model"], y=0.013)
         out_frames.append(fig_to_rgb(fig))
         plt.close(fig)
         print(f"vs-truth frame {k+1}/{len(frames)}", flush=True)
@@ -417,13 +462,15 @@ def gif_one_cam(P, out, ms, cam):
                  "one camera picture  →  a 16 × 16 vehicle-occupancy grid, every second",
                  color=FG, fontsize=19, fontweight="bold", ha="center", va="top")
         fig.text(0.5, 0.915,
-                 "orange = model prediction   ·   cyan outline = ground truth   ·   "
+                 "orange = model prediction   ·   "
+                 f"{KIND[P['kind']]['truth_legend']}   ·   "
                  "grey outline = the 90° wedge this camera can label",
                  color=DIM, fontsize=11, ha="center", va="top")
         fig.text(0.5, 0.018,
                  f"held-out episode {ei} · t = {k:02d} s · "
                  f"predicted {float((pr*fov).sum()):4.1f} vehicles, actual {float((gt*fov).sum()):4.1f}",
                  color=DIM, fontsize=12, ha="center", va="bottom", family="monospace")
+        _model_tag(fig, 0.028, P["model"], y=0.018)
         out_frames.append(fig_to_rgb(fig))
         plt.close(fig)
         print(f"one-cam frame {k+1}/{len(frames)}", flush=True)
@@ -433,13 +480,25 @@ def gif_one_cam(P, out, ms, cam):
 # ------------------------------------------------------------------------ main ----
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--preds", default="runs/gifs/preds_ep015_f000-039.npz")
-    ap.add_argument("--labels-cache", default="runs/cache/labels_visible.npy")
-    ap.add_argument("--alpha", type=float, default=0.8867)
-    ap.add_argument("--out-dir", default="runs/gifs")
+    ap.add_argument("--preds", required=True,
+                    help="npz from occ.gif_infer for the checkpoint being shown")
+    ap.add_argument("--labels", choices=["visible", "full"], default="visible",
+                    help="label set the checkpoint was trained on; picks the ground "
+                         "truth the clips are compared against")
+    ap.add_argument("--labels-cache", default=None,
+                    help="default: runs/cache/labels_<labels>.npy")
+    ap.add_argument("--alpha", type=float, default=None,
+                    help="global-composition calibration; default: the checkpoint's "
+                         "report/results.json, else 1.0")
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--model-label", default=None,
+                    help="stamped on every frame; default: from the out-dir name")
     ap.add_argument("--dpi", type=int, default=85)
     ap.add_argument("--ms", type=int, default=250)
     ap.add_argument("--cam", type=int, default=69)
+    ap.add_argument("--hero-cams", default=None,
+                    help="comma-separated camera ids for clip 1; default: picked by "
+                         "how much their occupancy changes second to second")
     ap.add_argument("--which", default="hero,truth,cam")
     ap.add_argument("--limit", type=int, default=0, help="render only the first N frames")
     ap.add_argument("--formats", default="mp4,gif",
@@ -450,11 +509,23 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
+    model = args.model_label
+    if model is None:
+        base = os.path.basename(os.path.normpath(args.out_dir))
+        model = base[len("clips_"):] if base.startswith("clips_") else base
+    alpha = args.alpha
+    if alpha is None:
+        rep = os.path.join(os.path.dirname(os.path.normpath(args.out_dir)),
+                           model, "report", "results.json")   # runs/clips_X -> runs/X
+        alpha = json.load(open(rep))["alpha"] if os.path.exists(rep) else 1.0
+        print(f"alpha={alpha:.4f} (from {rep if os.path.exists(rep) else 'default'})")
+
     K, cams = load_cameras()
     info = load_info()
     fov = load_fov_mask()
     comp_idx, gshape, sub = compose_tables(cams, info)
-    labels = np.load(args.labels_cache, mmap_mode="r")
+    labels = np.load(args.labels_cache or f"runs/cache/labels_{args.labels}.npy",
+                     mmap_mode="r")
 
     z = np.load(args.preds)
     ei = int(z["episode"])
@@ -466,8 +537,11 @@ def main():
         frames = frames[:args.limit]
         preds = preds[:args.limit]
 
-    P = dict(ei=ei, frames=frames, preds=preds, alpha=args.alpha, cams=cams, info=info,
+    P = dict(ei=ei, frames=frames, preds=preds, alpha=alpha, cams=cams, info=info,
              fov=fov, comp_idx=comp_idx, gshape=gshape, sub=sub, labels=labels,
+             kind=args.labels, model=model,
+             hero_cams=[int(c) for c in args.hero_cams.split(",")] if args.hero_cams
+                       else None,
              road=road_background(info), dpi=args.dpi,
              formats=[f.strip() for f in args.formats.split(",") if f.strip()],
              ffmpeg=args.ffmpeg)
