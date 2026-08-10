@@ -66,10 +66,10 @@ occ/train.py       training loop + masked metrics
 occ/selfcheck.py   pre-training geometry checks against dataset labels
 occ/evaluate.py    final local + global evaluation, calibration, figures
 occ/gif_infer.py   cache predictions for a run of sequential frames (GPU)
-occ/gif_render.py  the three explanation GIFs (CPU only)
+occ/gif_render.py  the three explanation clips, .mp4 and .gif (CPU only)
 slurm/             smoke.sbatch, train.sbatch, gif_infer.sbatch
 runs/r50_lss_v1/   checkpoints, log.jsonl, report/ (results.json + figures)
-runs/gifs/         the GIFs below
+runs/gifs/         the clips below
 ```
 
 ## Animations
@@ -77,20 +77,31 @@ runs/gifs/         the GIFs below
 Two stages, so the layout can be iterated on without a GPU: `gif_infer` writes every
 camera's predicted grid for a run of consecutive frames, `gif_render` draws from that
 cache. Frames in the dataset are **one simulated second apart**, so 40 frames played at
-4 fps is 40 s of town traffic in a 10 s loop.
+4 fps is 40 s of town traffic in a 10 s clip.
 
 ```bash
 sbatch slurm/gif_infer.sbatch                       # ep_015, frames 0-39, ~1 min on an H100
 PY=$HOME/software/occ-venv/bin/python
 $PY -m occ.gif_render --preds runs/gifs/preds_ep015_f000-039.npz \
-    --labels-cache runs/cache/labels_visible.npy --out-dir runs/gifs --ms 250 --cam 69
+    --labels-cache runs/cache/labels_visible.npy --out-dir runs/gifs \
+    --ms 250 --cam 69 --formats mp4,gif
 ```
+
+Each clip is written twice: **`.mp4`** (H.264, yuv420p, 24 fps with a keyframe every
+second — pausable and scrubbable, which is what you want when talking over it) and
+**`.gif`** (autoplays in a README or a chat window). The mp4 is encoded from the same
+true-colour frames, not transcoded from the 200-colour GIF. Source frames are *held*, not
+interpolated — the data really is 1 Hz.
 
 | file | what it shows |
 |---|---|
-| `town_from_cameras.gif` | the town map in the middle, eight camera feeds around it, a coloured beam from each feed to the slice of the map that camera fills in |
-| `town_pred_vs_truth.gif` | composed prediction next to the ground-truth town map, same colour scale |
-| `camera_069_to_grid.gif` | one camera picture next to its predicted 16×16 grid (cyan outline = truth) |
+| `town_from_cameras.{mp4,gif}` | the town map in the middle, eight camera feeds around it, a coloured beam from each feed to the slice of the map that camera fills in |
+| `town_pred_vs_truth.{mp4,gif}` | composed prediction next to the ground-truth town map, same colour scale |
+| `camera_069_to_grid.{mp4,gif}` | one camera picture next to its predicted 16×16 grid (cyan outline = truth) |
+
+The cluster's `ffmpeg` modules have no libx264 (the CUDA build's `h264_nvenc` needs a GPU),
+so `--formats mp4` uses a static ffmpeg at `~/software/bin/ffmpeg`, extracted from the
+`imageio-ffmpeg` wheel. Point `--ffmpeg` elsewhere if you have your own.
 
 The eight cameras in the first GIF are chosen automatically: highest *churn* (occupancy
 mass that changes from second to second, so moving traffic rather than parked cars),

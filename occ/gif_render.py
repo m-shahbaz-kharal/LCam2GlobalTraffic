@@ -1,9 +1,9 @@
-"""Render the three explanation GIFs from cached per-frame predictions.
+"""Render the three explanation clips (mp4 + gif) from cached per-frame predictions.
 
-  gif 1  hero        town map in the middle, camera feeds around it, a coloured beam
-                     from each feed to the slice of the town map that camera fills in
-  gif 2  vs truth    composed prediction next to the ground-truth town map
-  gif 3  one camera  a single camera picture next to its predicted local grid
+  clip 1  hero        town map in the middle, camera feeds around it, a coloured beam
+                      from each feed to the slice of the town map that camera fills in
+  clip 2  vs truth    composed prediction next to the ground-truth town map
+  clip 3  one camera  a single camera picture next to its predicted local grid
 
 CPU only: reads runs/gifs/preds_*.npz written by occ.gif_infer.
 """
@@ -159,6 +159,44 @@ def panel_image(ax, img, color, label, sub=None):
                 va="top", ha="right", bbox=dict(fc="#0b0f16cc", ec="none", pad=2.0))
 
 
+FFMPEG = os.path.expanduser("~/software/bin/ffmpeg")
+
+
+def save_mp4(frames, path, ms, ffmpeg=None, out_fps=24, crf=18):
+    """H.264 clip, same timing as the GIF but scrubbable and pausable.
+
+    Source frames are held (not interpolated) up to `out_fps`: the data really is one
+    frame per simulated second, and inventing in-between motion would be a lie.
+    """
+    ffmpeg = ffmpeg or (FFMPEG if os.path.exists(FFMPEG) else "ffmpeg")
+    h, w, _ = frames[0].shape
+    src_fps = 1000.0 / ms
+    cmd = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", f"{src_fps:g}",
+        "-i", "-",
+        # libx264 needs even dimensions in yuv420p; pad with the page background
+        "-vf", f"pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color={BG},fps={out_fps}",
+        "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-g", str(out_fps), "-movflags", "+faststart", path,
+    ]
+    import subprocess
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    for f in frames:
+        p.stdin.write(np.ascontiguousarray(f).tobytes())
+    p.stdin.close()
+    if p.wait() != 0:
+        raise RuntimeError("ffmpeg failed: " + " ".join(cmd))
+    print(f"wrote {path}  ({len(frames)} frames, {os.path.getsize(path)/1e6:.1f} MB)")
+
+
+def save_clip(frames, path_noext, ms, formats, ffmpeg=None):
+    if "gif" in formats:
+        save_gif(frames, path_noext + ".gif", ms)
+    if "mp4" in formats:
+        save_mp4(frames, path_noext + ".mp4", ms, ffmpeg=ffmpeg)
+
+
 def save_gif(frames, path, ms, colors=200):
     """One palette for the whole clip: no inter-frame flicker, and PIL can then encode
     only the rectangle that actually changed from frame to frame."""
@@ -293,7 +331,7 @@ def gif_hero(P, out, ms):
         out_frames.append(fig_to_rgb(fig))
         plt.close(fig)
         print(f"hero frame {k+1}/{len(frames)}", flush=True)
-    save_gif(out_frames, out, ms)
+    save_clip(out_frames, out, ms, P["formats"], P["ffmpeg"])
 
 
 def _heat_legend(fig, x, y, cmap=HEAT, label="vehicles per 4 m cell"):
@@ -344,7 +382,7 @@ def gif_vs_truth(P, out, ms):
         out_frames.append(fig_to_rgb(fig))
         plt.close(fig)
         print(f"vs-truth frame {k+1}/{len(frames)}", flush=True)
-    save_gif(out_frames, out, ms)
+    save_clip(out_frames, out, ms, P["formats"], P["ffmpeg"])
 
 
 # ---------------------------------------------------------------------- gif 3 ----
@@ -389,7 +427,7 @@ def gif_one_cam(P, out, ms, cam):
         out_frames.append(fig_to_rgb(fig))
         plt.close(fig)
         print(f"one-cam frame {k+1}/{len(frames)}", flush=True)
-    save_gif(out_frames, out, ms)
+    save_clip(out_frames, out, ms, P["formats"], P["ffmpeg"])
 
 
 # ------------------------------------------------------------------------ main ----
@@ -404,6 +442,9 @@ def main():
     ap.add_argument("--cam", type=int, default=69)
     ap.add_argument("--which", default="hero,truth,cam")
     ap.add_argument("--limit", type=int, default=0, help="render only the first N frames")
+    ap.add_argument("--formats", default="mp4,gif",
+                    help="mp4 (scrubbable, pausable) and/or gif (autoplays anywhere)")
+    ap.add_argument("--ffmpeg", default=None, help="ffmpeg binary for the mp4 encode")
     ap.add_argument("--gt-instead-of-pred", action="store_true",
                     help="layout preview without a trained model")
     args = ap.parse_args()
@@ -427,15 +468,17 @@ def main():
 
     P = dict(ei=ei, frames=frames, preds=preds, alpha=args.alpha, cams=cams, info=info,
              fov=fov, comp_idx=comp_idx, gshape=gshape, sub=sub, labels=labels,
-             road=road_background(info), dpi=args.dpi)
+             road=road_background(info), dpi=args.dpi,
+             formats=[f.strip() for f in args.formats.split(",") if f.strip()],
+             ffmpeg=args.ffmpeg)
 
     which = args.which.split(",")
     if "hero" in which:
-        gif_hero(P, os.path.join(args.out_dir, "town_from_cameras.gif"), args.ms)
+        gif_hero(P, os.path.join(args.out_dir, "town_from_cameras"), args.ms)
     if "truth" in which:
-        gif_vs_truth(P, os.path.join(args.out_dir, "town_pred_vs_truth.gif"), args.ms)
+        gif_vs_truth(P, os.path.join(args.out_dir, "town_pred_vs_truth"), args.ms)
     if "cam" in which:
-        gif_one_cam(P, os.path.join(args.out_dir, f"camera_{args.cam:03d}_to_grid.gif"),
+        gif_one_cam(P, os.path.join(args.out_dir, f"camera_{args.cam:03d}_to_grid"),
                     args.ms, args.cam)
     print("GIF_RENDER_DONE")
 
