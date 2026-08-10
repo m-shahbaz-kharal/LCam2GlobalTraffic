@@ -65,9 +65,36 @@ occ/model.py       LSSOcc network
 occ/train.py       training loop + masked metrics
 occ/selfcheck.py   pre-training geometry checks against dataset labels
 occ/evaluate.py    final local + global evaluation, calibration, figures
-slurm/             smoke.sbatch, train.sbatch
+occ/gif_infer.py   cache predictions for a run of sequential frames (GPU)
+occ/gif_render.py  the three explanation GIFs (CPU only)
+slurm/             smoke.sbatch, train.sbatch, gif_infer.sbatch
 runs/r50_lss_v1/   checkpoints, log.jsonl, report/ (results.json + figures)
+runs/gifs/         the GIFs below
 ```
+
+## Animations
+
+Two stages, so the layout can be iterated on without a GPU: `gif_infer` writes every
+camera's predicted grid for a run of consecutive frames, `gif_render` draws from that
+cache. Frames in the dataset are **one simulated second apart**, so 40 frames played at
+4 fps is 40 s of town traffic in a 10 s loop.
+
+```bash
+sbatch slurm/gif_infer.sbatch                       # ep_015, frames 0-39, ~1 min on an H100
+PY=$HOME/software/occ-venv/bin/python
+$PY -m occ.gif_render --preds runs/gifs/preds_ep015_f000-039.npz \
+    --labels-cache runs/cache/labels_visible.npy --out-dir runs/gifs --ms 250 --cam 69
+```
+
+| file | what it shows |
+|---|---|
+| `town_from_cameras.gif` | the town map in the middle, eight camera feeds around it, a coloured beam from each feed to the slice of the map that camera fills in |
+| `town_pred_vs_truth.gif` | composed prediction next to the ground-truth town map, same colour scale |
+| `camera_069_to_grid.gif` | one camera picture next to its predicted 16×16 grid (cyan outline = truth) |
+
+The eight cameras in the first GIF are chosen automatically: highest *churn* (occupancy
+mass that changes from second to second, so moving traffic rather than parked cars),
+spread north–south over each half of town. `--cam` picks the single camera for the third.
 
 ## Reproduce
 
