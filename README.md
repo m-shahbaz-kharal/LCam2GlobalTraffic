@@ -16,23 +16,45 @@ Efficient-SOTA camera→BEV recipe (Lift-Splat / BEVDet / FlashOcc family), sing
   make the lift a single `index_add_`
 - Small 2D conv **BEV head** → softplus → non-negative soft counts (grid sum = vehicle count)
 
-Trained on the *visible* labels (`local_occupancy_visible.npz`) with FOV-mask-weighted MSE
-(positive cells ×10) + a count-consistency L1 term. Split by episode: ep_000–012 train,
-ep_013–015 validation. Horizontal-flip augmentation (mirrors the BEV target).
+Loss is FOV-mask-weighted MSE (positive cells ×10) + a count-consistency L1 term. Split by
+episode: ep_000–012 train, ep_013–015 validation. Horizontal-flip augmentation (mirrors the
+BEV target). Two models were trained, identical in every respect but the target:
 
-## Results (held-out episodes 13–15)
+| run | target | answers |
+|---|---|---|
+| `r50_lss_v1` | `local_occupancy_visible.npz` | what the camera can actually see |
+| `r50_lss_full_v1` | `local_occupancy.npz` | every vehicle present, including occluded ones |
 
-| | score |
-|---|---|
-| Occupied-cell F1 @0.25 (local) | **0.917** (P 0.930 / R 0.906) |
-| Vehicles per view, mean abs. error | **0.108** |
-| Views within ±0.5 vehicles | **93.0 %** |
-| Town map: occupied-cell F1 | **0.808** (oracle ceiling 0.825) |
-| Town vehicle count error | **1.9 %** |
+## Results (held-out episodes 13–15, 84,600 camera views)
+
+| | visible-label model | full-label model |
+|---|---|---|
+| Occupied-cell F1 @0.25 | **0.917** (P .930 / R .906) | **0.871** (P .896 / R .847) |
+| Vehicles per view, mean abs. error | **0.108** | **0.261** |
+| Views within ±0.5 vehicles | **93.0 %** | **83.7 %** |
+| Town map: occupied-cell F1 | **0.808** (ceiling 0.825) | **0.783** (ceiling 0.824) |
+| Town vehicle count error | **1.9 %** | **2.0 %** |
+
+Each is scored against its own target, so the columns are not directly comparable — the
+full-label model is answering a strictly harder question (a quarter of the vehicles in a
+typical view are hidden from that camera).
+
+**Hidden-vehicle inference** (`occ/compare.py`) settles whether the full-label model really
+infers what it cannot see. Over 8,272 held-out cells that hold a vehicle with *no visible
+trace of it*:
+
+| | hidden cells found | hidden mass recovered | visible-cell recall |
+|---|---|---|---|
+| visible-label model | 3.3 % | 3.6 % | 90.6 % |
+| full-label model | **38.7 %** | **40.3 %** | 90.1 % |
+
+The full-label model recovers ~40 % of what is invisible to the camera — 12× the
+visible-label model's incidental rate — while giving up 0.5 pp on cells it can plainly see.
 
 Global maps are composed by splatting each camera's masked grid into the town grid,
 taking the per-cell **max** over cameras (union semantics — a vehicle seen by several
-cameras counts once), then scaling by a calibration constant fitted on training episodes.
+cameras counts once), then scaling by a calibration constant fitted on training episodes
+(0.887 visible / 0.860 full).
 
 ## Layout
 
