@@ -3,8 +3,11 @@
 One network that turns a single fixed-traffic-camera picture into a **16×16 local
 vehicle-occupancy grid** (4 m cells, 64×64 m ahead of the camera), plus the machinery to
 compose all 141 per-camera grids into one **town-wide occupancy map**. Built on the
-[UCFTCam2TWorld dataset](/lustre/fs1/home/mu290328/datasets/UCFTCam2TWorld) (CARLA Town05,
-141 cameras, 16 episodes).
+UCFTCam2TWorld dataset (CARLA Town05, 141 cameras, 16 episodes).
+
+The town-wide grid is the input to
+[GTraffic2Crash](https://github.com/m-shahbaz-kharal/GTraffic2Crash), which forecasts it
+five seconds ahead to anticipate collisions.
 
 ## Model
 
